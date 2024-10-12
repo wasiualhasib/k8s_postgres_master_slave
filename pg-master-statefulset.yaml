@@ -1,0 +1,40 @@
+# pg-master-statefulset.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pg-master
+spec:
+  serviceName: pg-master
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+      role: master
+  template:
+    metadata:
+      labels:
+        app: postgres
+        role: master
+    spec:
+      securityContext:
+        runAsUser: 999  # PostgreSQL user UID
+        runAsGroup: 999  # PostgreSQL group GID
+        fsGroup: 999
+
+      containers:
+      - name: postgres
+        image: postgres:15
+        env:
+        - name: POSTGRES_USER
+          value: "postgres"
+        - name: POSTGRES_PASSWORD
+          value: "password"
+        - name: PGDATA
+          value: "/var/lib/postgresql/data"
+        volumeMounts:
+        - name: pg-data  # Mount the data directory
+          mountPath: /var/lib/postgresql/data
+      volumes:
+      - name: pg-data
+        persistentVolumeClaim:
+          claimName: pg-master-pvc  # Reference pre-created data PVC

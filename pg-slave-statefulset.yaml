@@ -1,0 +1,63 @@
+# pg-slave-statefulset.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pg-slave
+spec:
+  serviceName: pg-slave
+  replicas: 1  # For simplicity, one slave; increase replicas if needed
+  selector:
+    matchLabels:
+      app: postgres
+      role: slave
+  template:
+    metadata:
+      labels:
+        app: postgres
+        role: slave
+    spec:
+      securityContext:
+        runAsUser: 999  # PostgreSQL user UID
+        runAsGroup: 999  # PostgreSQL group GID
+        fsGroup: 999
+      containers:
+      - name: postgres
+        image: postgres:15
+        env:
+        - name: POSTGRES_USER
+          value: "postgres"
+        - name: POSTGRES_PASSWORD
+          value: "password"
+        - name: PGDATA
+          value: "/var/lib/postgresql/data"
+        volumeMounts:
+        - name: pg-data
+          mountPath: /var/lib/postgresql/data
+        command:
+        - "bash"
+        - "-c"
+        - |
+          # Extract replica name from the pod's hostname (e.g., pg-slave-0)
+          REPLICA_NAME=$(hostname | sed 's/-/_/g')
+
+          rm -rf /var/lib/postgresql/data/*  # Ensure the directory is empty
+          until pg_isready --host=pg-master --port=5432; do
+            echo "Waiting for master to be ready..."
+            sleep 2
+          done
+          pg_basebackup -h pg-master -D /tmp/pgdata -U postgres -v -P --wal-method=stream
+          mv /tmp/pgdata/* /var/lib/postgresql/data/
+          chown -R postgres:postgres /var/lib/postgresql/data/
+          psql -h pg-master  -U postgres -c "SELECT pg_create_physical_replication_slot('${REPLICA_NAME}');"
+          echo "primary_slot_name = '${REPLICA_NAME}'" |  tee -a /var/lib/postgresql/data/postgresql.conf
+          echo "primary_conninfo = 'host=pg-master port=5432 user=postgres password=password application_name=${REPLICA_NAME}'" |  tee -a  /var/lib/postgresql/data//postgresql.conf
+          touch /var/lib/postgresql/data/standby.signal
+          chmod 700 /var/lib/postgresql/data/
+          rm -rf /tmp/pgdata
+          echo "Starting PostgreSQL..."
+          postgres
+
+      volumes:
+      - name: pg-data
+        persistentVolumeClaim:
+          claimName: pg-slave-pvc  # Reference pre-created PVC
