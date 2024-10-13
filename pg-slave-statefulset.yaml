@@ -1,11 +1,10 @@
-# pg-slave-statefulset.yaml
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: pg-slave
 spec:
   serviceName: pg-slave
-  replicas: 1  # For simplicity, one slave; increase replicas if needed
+  replicas: 1  # Adjust replicas as needed
   selector:
     matchLabels:
       app: postgres
@@ -16,10 +15,6 @@ spec:
         app: postgres
         role: slave
     spec:
-      securityContext:
-        runAsUser: 999  # PostgreSQL user UID
-        runAsGroup: 999  # PostgreSQL group GID
-        fsGroup: 999
       containers:
       - name: postgres
         image: postgres:15
@@ -30,9 +25,16 @@ spec:
           value: "password"
         - name: PGDATA
           value: "/var/lib/postgresql/data"
+        - name: PG_MASTER_HOST
+          value: "pg-master"
+        - name: PG_PORT
+          value: "5432"
         volumeMounts:
         - name: pg-data
           mountPath: /var/lib/postgresql/data
+        securityContext:
+          runAsUser: 999  # PostgreSQL user UID
+          runAsGroup: 999  # PostgreSQL group GID
         command:
         - "bash"
         - "-c"
@@ -41,23 +43,35 @@ spec:
           REPLICA_NAME=$(hostname | sed 's/-/_/g')
 
           rm -rf /var/lib/postgresql/data/*  # Ensure the directory is empty
-          until pg_isready --host=pg-master --port=5432; do
+          until pg_isready --host=$PG_MASTER_HOST --port=$PG_PORT; do
             echo "Waiting for master to be ready..."
             sleep 2
           done
-          pg_basebackup -h pg-master -D /tmp/pgdata -U postgres -v -P --wal-method=stream
+          pg_basebackup -h $PG_MASTER_HOST -D /tmp/pgdata -U postgres -v -P --wal-method=stream
           mv /tmp/pgdata/* /var/lib/postgresql/data/
-          chown -R postgres:postgres /var/lib/postgresql/data/
-          psql -h pg-master  -U postgres -c "SELECT pg_create_physical_replication_slot('${REPLICA_NAME}');"
-          echo "primary_slot_name = '${REPLICA_NAME}'" |  tee -a /var/lib/postgresql/data/postgresql.conf
-          echo "primary_conninfo = 'host=pg-master port=5432 user=postgres password=password application_name=${REPLICA_NAME}'" |  tee -a  /var/lib/postgresql/data//postgresql.conf
+          chown -R postgres:postgres /var/lib/postgresql/data
+          psql -h $PG_MASTER_HOST -U postgres -c "SELECT pg_create_physical_replication_slot('${REPLICA_NAME}');"
+          echo "primary_slot_name = '${REPLICA_NAME}'" | tee -a /var/lib/postgresql/data/postgresql.conf
+          echo "primary_conninfo = 'host=$PG_MASTER_HOST port=$PG_PORT user=postgres password=password application_name=${REPLICA_NAME}'" | tee -a /var/lib/postgresql/data/postgresql.conf
           touch /var/lib/postgresql/data/standby.signal
           chmod 700 /var/lib/postgresql/data/
           rm -rf /tmp/pgdata
           echo "Starting PostgreSQL..."
-          postgres
+          exec postgres  # Use exec to replace the shell with the PostgreSQL process
+
+        lifecycle:
+          preStop:
+            exec:
+              command:
+                - "bash"
+                - "-c"
+                - |
+                  REPLICA_NAME=$(hostname | sed 's/-/_/g')
+                  echo "Deleting replication slot ${REPLICA_NAME} from master..."
+                  psql -h $PG_MASTER_HOST -U postgres -p $PG_PORT -c "SELECT pg_drop_replication_slot('${REPLICA_NAME}');"
 
       volumes:
       - name: pg-data
         persistentVolumeClaim:
-          claimName: pg-slave-pvc  # Reference pre-created PVC
+          claimName: pg-slave-pvc
+
