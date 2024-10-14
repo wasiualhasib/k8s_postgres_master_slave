@@ -34,7 +34,15 @@ spec:
         volumeMounts:
         - name: pg-data  # Mount the data directory
           mountPath: /var/lib/postgresql/data
+        - name: pg-config-path
+          mountPath: /etc/postgresql/custom
+
       volumes:
       - name: pg-data
         persistentVolumeClaim:
           claimName: pg-master-pvc  # Reference pre-created data PVC
+      - name: pg-config-path
+        configMap:
+          name: pg-config
+          defaultMode: 0755
+

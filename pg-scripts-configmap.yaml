@@ -1,0 +1,26 @@
+# pg-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pg-script-config
+data:
+  postgresql.sh: |
+          # Extract replica name from the pod's hostname (e.g., pg-slave-0)
+          REPLICA_NAME=$(hostname | sed 's/-/_/g')
+          rm -rf /var/lib/postgresql/data/*  # Ensure the directory is empty
+          until pg_isready --host=$PG_MASTER_HOST --port=$PG_PORT; do
+            echo "Waiting for master to be ready..."
+            sleep 2
+          done
+          pg_basebackup -h $PG_MASTER_HOST -D /tmp/pgdata -U postgres -v -P --wal-method=stream
+          mv /tmp/pgdata/* /var/lib/postgresql/data/
+          chown -R postgres:postgres /var/lib/postgresql/data
+          psql -h $PG_MASTER_HOST -U postgres -c "SELECT pg_create_physical_replication_slot('${REPLICA_NAME}');"
+          echo "primary_slot_name = '${REPLICA_NAME}'" | tee -a /var/lib/postgresql/data/postgresql.conf
+          echo "primary_conninfo = 'host=$PG_MASTER_HOST port=$PG_PORT user=postgres password=password application_name=${REPLICA_NAME}'" | tee -a /var/lib/postgresql/data/postgresql.conf
+          touch /var/lib/postgresql/data/standby.signal
+          chmod 700 /var/lib/postgresql/data/
+          rm -rf /tmp/pgdata
+          echo "Starting PostgreSQL..."
+          #exec postgres  # Use exec to replace the shell with the PostgreSQL process
+

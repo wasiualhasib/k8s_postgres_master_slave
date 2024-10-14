@@ -1,0 +1,13 @@
+apiVersion: authentication.k8s.io/v1
+kind: TokenRequest
+metadata:
+  name: dashboard-token
+spec:
+  audiences:
+  - kubernetes-dashboard
+  expirationSeconds: 86400  # Token valid for 1 hour
+  boundObjectRef:
+    kind: ServiceAccount
+    name: dashboard-admin-sa
+    apiVersion: v1
+
